@@ -1,0 +1,358 @@
+Timer unit: 1e-06 s
+
+Total time: 8731.73 s
+File: SegSRGAN_training.py
+Function: train at line 91
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+    91                                               @profile
+    92                                               def train(self,
+    93                                                         snapshot_folder,
+    94                                                         dice_file,
+    95                                                         mse_file,
+    96                                                         folder_training_data, patch_size,
+    97                                                         training_epoch=200, batch_size=16, snapshot_epoch=1, initialize_epoch=1, number_of_disciminator_iteration=5,
+    98                                                         resuming=None, interp='scipy', interpolation_type='Spline',image_cropping_method="bounding_box"):
+    99                                                   """
+   100                                           
+   101                                                   :param patch_size:
+   102                                                   :param snapshot_folder:
+   103                                                   :param dice_file:
+   104                                                   :param mse_file:
+   105                                                   :param folder_training_data:
+   106                                                   :param training_epoch:
+   107                                                   :param batch_size:
+   108                                                   :param snapshot_epoch:
+   109                                                   :param initialize_epoch:
+   110                                                   :param number_of_disciminator_iteration:
+   111                                                   :param resuming:
+   112                                                   :param interp: interpolation type (scipy or sitk)
+   113                                                   """
+   114                                                   # snapshot_prefix='weights/SegSRGAN_epoch'
+   115         1         11.0     11.0      0.0          print("train begin")
+   116         1         19.0     19.0      0.0          snapshot_prefix = os.path.join(snapshot_folder,"SegSRGAN_epoch")
+   117                                           
+   118         1         14.0     14.0      0.0          print("Generator metrics name :"+str(self.GeneratorModel_multi_gpu.metrics_names))
+   119         1         10.0     10.0      0.0          print("Disciminator metrics name :"+str(self.DiscriminatorModel_multi_gpu.metrics_names))
+   120                                           
+   121                                                   # boolean to print only one time 'the number of patch not in one epoch (mode batch_size)'
+   122         1          2.0      2.0      0.0          never_print = True
+   123         1        584.0    584.0      0.0          if os.path.exists(snapshot_folder) is False:
+   124                                                       os.makedirs(snapshot_folder)
+   125                                           
+   126                                                   # Initialization Parameters
+   127         1         33.0     33.0      0.0          real = -np.ones([batch_size, 1], dtype=np.float32)
+   128         1          3.0      3.0      0.0          fake = -real
+   129         1          4.0      4.0      0.0          dummy = np.zeros([batch_size, 1], dtype=np.float32)
+   130                                           
+   131                                                   # Data processing
+   132                                                   # TrainingSet = ProcessingTrainingSet(self.TrainingText,batch_size, InputName='data', LabelName = 'label')
+   133                                           
+   134         1       3777.0   3777.0      0.0          data = pd.read_csv(self.training_csv)
+   135                                           
+   136         1        604.0    604.0      0.0          data["HR_image"] = self.base_path + data["HR_image"]
+   137         1        449.0    449.0      0.0          data["Label_image"] = self.base_path + data["Label_image"]
+   138                                                   
+   139         1          3.0      3.0      0.0          if self.fit_mask or (image_cropping_method=='overlapping_with_mask'):
+   140                                                       
+   141         1        424.0    424.0      0.0              data["Mask_image"] = self.base_path + data["Mask_image"]
+   142                                           
+   143         1        835.0    835.0      0.0          data_train = data[data['Base'] == "Train"]
+   144         1        680.0    680.0      0.0          data_test = data[data['Base'] == "Test"]
+   145                                           
+   146                                                   # Resuming
+   147         1          3.0      3.0      0.0          if initialize_epoch == 1:
+   148                                                       iteration = 0
+   149                                                       if resuming is None:
+   150                                                           print("Training from scratch")
+   151                                                       else:
+   152                                                           print("Training from the pretrained model (names of layers must be identical): ", resuming)
+   153                                                           self.GeneratorModel.load_weights(resuming, by_name=True)
+   154                                           
+   155         1          3.0      3.0      0.0          elif initialize_epoch < 1:
+   156                                                       raise AssertionError('Resumming needs a positive epoch')
+   157                                                       
+   158         1          2.0      2.0      0.0          elif training_epoch < initialize_epoch : 
+   159                                                       
+   160                                                       raise AssertionError('initialize epoch need to be smaller than the total number of training epoch ')
+   161                                                   else:
+   162         1          3.0      3.0      0.0              if resuming is None:
+   163                                                           raise AssertionError('We need pretrained weights')
+   164                                                       else:
+   165         1         21.0     21.0      0.0                  print ('TRAINING IS RESUMING')
+   166         1          7.0      7.0      0.0                  print('Continue training from : ', resuming)
+   167         1     764555.0 764555.0      0.0                  self.GeneratorModel.load_weights(resuming, by_name=True)
+   168         1          3.0      3.0      0.0                  iteration = 0
+   169                                                   # patch test creation :
+   170                                           
+   171         1          5.0      5.0      0.0          t1 = time.time()
+   172                                           
+   173         1        218.0    218.0      0.0          test_contrast_list = np.linspace(1 - self.contrast_max, 1 + self.contrast_max, data_test.shape[0])
+   174                                           
+   175                                                   # list_res[0] = lower bound and list_res[1] = borne supp
+   176                                                   # list_res[0][0] = lower bound for the first coordinate
+   177                                           
+   178         1         78.0     78.0      0.0          lin_res_x = np.linspace(self.list_res_max[0][0], self.list_res_max[1][0], data_test.shape[0])
+   179         1         48.0     48.0      0.0          lin_res_y = np.linspace(self.list_res_max[0][1], self.list_res_max[1][1], data_test.shape[0])
+   180         1         44.0     44.0      0.0          lin_res_z = np.linspace(self.list_res_max[0][2], self.list_res_max[1][2], data_test.shape[0])
+   181                                           
+   182         1          3.0      3.0      0.0          res_test = [(lin_res_x[i],
+   183                                                                lin_res_y[i],
+   184         1          9.0      9.0      0.0                       lin_res_z[i]) for i in range(data_test.shape[0])]
+   185                                           
+   186                                                   test_path_save_npy, test_Path_Datas_mini_batch, test_Labels_mini_batch, test_remaining_patch = \
+   187         1          2.0      2.0      0.0              create_patch_from_df_hr(df=data_test, per_cent_val_max=self.percent_val_max,
+   188         1          2.0      2.0      0.0                                      contrast_list=test_contrast_list, list_res=res_test, order=3,
+   189         1          2.0      2.0      0.0                                      thresholdvalue=0, patch_size=patch_size, batch_size=1,
+   190                                                                               # 1 to keep all data
+   191         1         18.0     18.0      0.0                                      path_save_npy=os.path.join(folder_training_data,"test_mini_batch"), stride=20,
+   192         1          2.0      2.0      0.0                                      is_conditional=self.is_conditional, interp =interp,
+   193         1          2.0      2.0      0.0                                      interpolation_type=interpolation_type,
+   194         1          2.0      2.0      0.0                                      fit_mask=self.fit_mask,
+   195         1          2.0      2.0      0.0                                      image_cropping_method=image_cropping_method,
+   196         1  120309078.0 120309078.0      1.4                                      nb_classe_mask = self.nb_classe_mask)
+   197                                           
+   198         1          5.0      5.0      0.0          t2 = time.time()
+   199                                           
+   200         1         43.0     43.0      0.0          print("time for making test npy :" + str(t2 - t1))
+   201                                                   
+   202         1          5.0      5.0      0.0          if self.fit_mask :
+   203                                                       
+   204         1          3.0      3.0      0.0              colunms_dice = ["Dice_label_1"]
+   205         1          8.0      8.0      0.0              colunms_dice_mask =  ["Dice_mask"+str(i) for i in range(self.nb_classe_mask)]
+   206         1          3.0      3.0      0.0              colunms_dice.extend(colunms_dice_mask)
+   207                                                       
+   208                                                   else : 
+   209                                                       colunms_dice=["Dice"]
+   210                                           
+   211         1       5531.0   5531.0      0.0          df_dice = pd.DataFrame(index=np.arange(initialize_epoch, training_epoch + 1), columns=colunms_dice)
+   212         1       2487.0   2487.0      0.0          df_MSE = pd.DataFrame(index=np.arange(initialize_epoch, training_epoch + 1), columns=["MSE"])
+   213                                           
+   214                                                   # Training phase
+   215         3         14.0      4.7      0.0          for EpochIndex in range(initialize_epoch, training_epoch + 1):
+   216                                           
+   217         2        138.0     69.0      0.0              train_contrast_list = np.random.uniform(1 - self.contrast_max, 1 + self.contrast_max, data_train.shape[0])
+   218                                           
+   219         2          6.0      3.0      0.0              res_train = [(np.random.uniform(self.list_res_max[0][0], self.list_res_max[1][0]),
+   220                                                                     np.random.uniform(self.list_res_max[0][1], self.list_res_max[1][1]),
+   221                                                                     np.random.uniform(self.list_res_max[0][2], self.list_res_max[1][2])) for i in
+   222         2        221.0    110.5      0.0                           range(data_train.shape[0])]
+   223                                           
+   224         2          9.0      4.5      0.0              t1 = time.time()
+   225                                           
+   226                                                       train_path_save_npy, train_Path_Datas_mini_batch, train_Labels_mini_batch, train_remaining_patch = \
+   227         2          5.0      2.5      0.0                  create_patch_from_df_hr(df=data_train, per_cent_val_max=self.percent_val_max,
+   228         2          5.0      2.5      0.0                                          contrast_list=train_contrast_list, list_res=res_train, order=3,
+   229         2          4.0      2.0      0.0                                          thresholdvalue=0, patch_size=patch_size, batch_size=batch_size,
+   230         2         24.0     12.0      0.0                                          path_save_npy=os.path.join(folder_training_data,"train_mini_batch"), stride=20,
+   231         2          5.0      2.5      0.0                                          is_conditional=self.is_conditional, interp=interp,
+   232         2          5.0      2.5      0.0                                          interpolation_type=interpolation_type,
+   233         2          5.0      2.5      0.0                                          fit_mask=self.fit_mask,
+   234         2          5.0      2.5      0.0                                          image_cropping_method=image_cropping_method,
+   235         2 1135823348.0 567911674.0     13.0                                          nb_classe_mask = self.nb_classe_mask)
+   236                                                           
+   237         2         14.0      7.0      0.0              iterationPerEpoch = len(train_Path_Datas_mini_batch)
+   238                                           
+   239         2         22.0     11.0      0.0              t2 = time.time()
+   240                                           
+   241         2         91.0     45.5      0.0              print("time for making train npy :" + str(t2 - t1))
+   242                                           
+   243         2          5.0      2.5      0.0              if never_print:
+   244         1          7.0      7.0      0.0                  print("At each epoch " + str(train_remaining_patch) + " patches will not be in the training data for "
+   245                                                                                                                 "this epoch")
+   246         1          2.0      2.0      0.0                  never_print = False
+   247                                           
+   248         2         12.0      6.0      0.0              print("Processing epoch : " + str(EpochIndex))
+   249      1570       4920.0      3.1      0.0              for iters in range(0, iterationPerEpoch):
+   250                                           
+   251      1568       4914.0      3.1      0.0                  iteration += 1
+   252                                           
+   253                                                           # Training discriminator
+   254      9408      31930.0      3.4      0.0                  for cidx in range(number_of_disciminator_iteration):
+   255                                           
+   256      7840      20833.0      2.7      0.0                      t1 = time.time()
+   257                                           
+   258                                                               # Loading data randomly
+   259      7840     774093.0     98.7      0.0                      randomNumber = int(np.random.randint(0, iterationPerEpoch, 1))
+   260                                                               
+   261      7840     120210.0     15.3      0.0                      print("train on batch : ",train_Path_Datas_mini_batch[randomNumber])
+   262                                           
+   263      7840   89483491.0  11413.7      1.0                      train_input = np.load(train_Path_Datas_mini_batch[randomNumber])[:, 0, :, :, :][:, np.newaxis, :, :,
+   264                                                                             :]
+   265                                                               # select 0 coordoniate and add one axis at the same place
+   266                                           
+   267      7840  273389129.0  34871.1      3.1                      train_output = np.load(train_Labels_mini_batch[randomNumber])
+   268                                           
+   269      7840      57840.0      7.4      0.0                      if self.is_conditional:
+   270                                                                   
+   271                                           
+   272                                                                   train_res = np.load(train_Path_Datas_mini_batch[randomNumber])[:, 1, :, :, :][:, np.newaxis, :,
+   273                                                                               :, :]
+   274                                           
+   275                                                                   # Generating fake and interpolation images
+   276                                                                   fake_images = self.GeneratorModel_multi_gpu.predict([train_input, train_res])[1]
+   277                                                                   
+   278                                                                   if self.fit_mask :
+   279                                                                       epsilon = np.random.uniform(0, 1, size=(batch_size, 3, 1, 1, 1))
+   280                                                                   else : 
+   281                                                                       epsilon = np.random.uniform(0, 1, size=(batch_size, 2, 1, 1, 1))
+   282                                                                       
+   283                                                                   interpolation = epsilon * train_output + (1 - epsilon) * fake_images
+   284                                                                   # Training
+   285                                                                   dis_loss = self.DiscriminatorModel_multi_gpu.train_on_batch([train_output, fake_images,
+   286                                                                                                                                interpolation, train_res],
+   287                                                                                                                               [real, fake, dummy])
+   288                                                               else:
+   289                                           
+   290                                                                   # Generating fake and interpolation images
+   291      7840 1751492442.0 223404.6     20.1                          fake_images = self.GeneratorModel_multi_gpu.predict(train_input)[1]
+   292                                                                   
+   293                                                                   
+   294      7840      51729.0      6.6      0.0                          if self.fit_mask :
+   295      7840     422485.0     53.9      0.0                              epsilon = np.random.uniform(0, 1, size=(batch_size, 2+self.nb_classe_mask, 1, 1, 1))
+   296                                                                   else : 
+   297                                                                       epsilon = np.random.uniform(0, 1, size=(batch_size, 2, 1, 1, 1))
+   298                                           
+   299      7840 1286234482.0 164060.5     14.7                          interpolation = epsilon * train_output + (1 - epsilon) * fake_images
+   300                                                                   # Training
+   301      7840      83349.0     10.6      0.0                          dis_loss = self.DiscriminatorModel_multi_gpu.train_on_batch([train_output, fake_images,
+   302      7840      25503.0      3.3      0.0                                                                                       interpolation],
+   303      7840 3177864133.0 405339.8     36.4                                                                                      [real, fake, dummy])
+   304                                           
+   305      7840      59549.0      7.6      0.0                      t2 = time.time()
+   306                                           
+   307      7840     421399.0     53.7      0.0                      print("time for one uptade of discriminator :" + str(t2 - t1))
+   308      7840     161039.0     20.5      0.0                      print("Update " + str(cidx) + ": [D loss : " + str(dis_loss) + "]")
+   309                                           
+   310                                                           # Training generator
+   311                                                           # Loading data        
+   312                                           
+   313      1568       4328.0      2.8      0.0                  t1 = time.time()
+   314                                           
+   315      1568   18147413.0  11573.6      0.2                  train_input_gen = np.load(train_Path_Datas_mini_batch[iters])[:, 0, :, :, :][:, np.newaxis, :, :, :]
+   316      1568   54770978.0  34930.5      0.6                  train_output_gen = np.load(train_Labels_mini_batch[iters])
+   317                                           
+   318      1568      11511.0      7.3      0.0                  if self.is_conditional:
+   319                                           
+   320                                                               train_res_gen = np.load(train_Path_Datas_mini_batch[iters])[:, 1, :, :, :][:, np.newaxis, :, :, :]
+   321                                                               # Training                                      
+   322                                                               gen_loss = self.GeneratorModel_multi_gpu.train_on_batch([train_input_gen, train_res_gen],
+   323                                                                                                                       [real, train_output_gen])
+   324                                                           else:
+   325                                                               # Training                                      
+   326      1568  625905917.0 399174.7      7.2                      gen_loss = self.GeneratorModel_multi_gpu.train_on_batch([train_input_gen], [real, train_output_gen])
+   327                                           
+   328      1568      91638.0     58.4      0.0                  print("Iter " + str(iteration) + " [A loss : " + str(gen_loss) + "]")
+   329                                           
+   330      1568       8064.0      5.1      0.0                  t2 = time.time()
+   331                                           
+   332      1568      23907.0     15.2      0.0                  print("time for one uptade of generator :" + str(t2 - t1))
+   333                                           
+   334         2          7.0      3.5      0.0              if EpochIndex % snapshot_epoch == 0:
+   335                                                           # Save weights:
+   336         2     267221.0 133610.5      0.0                  self.GeneratorModel.save_weights(snapshot_prefix + '_' + str(EpochIndex))
+   337         2         75.0     37.5      0.0                  print("Snapshot :" + snapshot_prefix + '_' + str(EpochIndex))
+   338                                           
+   339         2        192.0     96.0      0.0              MSE_list = []
+   340         2        148.0     74.0      0.0              VP = []
+   341         2         76.0     38.0      0.0              Pos_pred = []
+   342         2         86.0     43.0      0.0              Pos_label = []
+   343                                                       # for the three following object first is the dimension of the mask class and the second dimension is the test patch dimension
+   344         2        464.0    232.0      0.0              VP_mask_all_label = [[] for i in range(self.nb_classe_mask)]
+   345         2        334.0    167.0      0.0              Pos_pred_mask_all_label = [[] for i in range(self.nb_classe_mask)]
+   346         2        387.0    193.5      0.0              Pos_label_mask_all_label = [[] for i in range(self.nb_classe_mask)]
+   347                                           
+   348         2         10.0      5.0      0.0              t1 = time.time()
+   349                                           
+   350      3698       9859.0      2.7      0.0              for test_iter in range(len(test_Labels_mini_batch)):
+   351                                           
+   352      3696   14186623.0   3838.4      0.2                  TestLabels = np.load(test_Labels_mini_batch[test_iter])
+   353      3696    8822384.0   2387.0      0.1                  TestDatas = np.load(test_Path_Datas_mini_batch[test_iter])[:, 0, :, :, :][:, np.newaxis, :, :, :]
+   354                                           
+   355      3696      15643.0      4.2      0.0                  if self.is_conditional:
+   356                                           
+   357                                                               TestRes = np.load(test_Path_Datas_mini_batch[test_iter])[:, 1, :, :, :][:, np.newaxis, :, :, :]
+   358                                           
+   359                                                               pred = self.generator.predict([TestDatas, TestRes])
+   360                                           
+   361                                                           else:
+   362                                           
+   363      3696   96065378.0  25991.7      1.1                      pred = self.generator.predict([TestDatas])
+   364                                           
+   365      3696    1749501.0    473.3      0.0                  pred[:, 0, :, :, :][pred[:, 0, :, :, :] < 0] = 0
+   366                                           
+   367      3696    1536988.0    415.9      0.0                  MSE_list.append(np.sum((pred[:, 0, :, :, :] - TestLabels[:, 0, :, :, :]) ** 2))
+   368                                           
+   369      3696    1906309.0    515.8      0.0                  VP.append(np.sum((pred[:, 1, :, :, :] > 0.5) & (TestLabels[:, 1, :, :, :] == 1)))
+   370                                           
+   371      3696    1266957.0    342.8      0.0                  Pos_pred.append(np.sum(pred[:, 1, :, :, :] > 0.5))
+   372                                           
+   373      3696     445635.0    120.6      0.0                  Pos_label.append(np.sum(TestLabels[:, 1, :, :, :]))
+   374                                                           
+   375      3696      15535.0      4.2      0.0                  if self.fit_mask : 
+   376                                                               
+   377      3696   10076194.0   2726.2      0.1                      estimated_mask_discretized = np.argmax(pred[:, 2:, :, :, :],axis=1)
+   378                                                               
+   379     18480      68607.0      3.7      0.0                      for i in range(self.nb_classe_mask):
+   380                                                               
+   381     14784    7812964.0    528.5      0.1                          VP_mask_all_label[i].append(np.sum((estimated_mask_discretized==i) & (TestLabels[:, 2+i, :, :, :] == 1)))
+   382     14784    5474583.0    370.3      0.1                          Pos_pred_mask_all_label[i].append(np.sum(estimated_mask_discretized==i))
+   383     14784    5543945.0    375.0      0.1                          Pos_label_mask_all_label[i].append(np.sum(TestLabels[:, 2+i, :, :, :] == 1))
+   384                                           
+   385         2         12.0      6.0      0.0              t2 = time.time()
+   386                                           
+   387         2        106.0     53.0      0.0              print("Evaluation on test data time : " + str(t2 - t1))
+   388                                           
+   389         2     333749.0 166874.5      0.0              gen_weights = np.array(self.GeneratorModel.get_weights())
+   390         2      16445.0   8222.5      0.0              gen_weights_multi = np.array(self.GeneratorModel_multi_gpu.get_weights())
+   391                                           
+   392         2          8.0      4.0      0.0              weights_idem = True
+   393                                           
+   394       128        306.0      2.4      0.0              for i in range(len(gen_weights)):
+   395       126      24279.0    192.7      0.0                  idem = np.array_equal(gen_weights[i], gen_weights_multi[i])
+   396                                           
+   397       126        320.0      2.5      0.0                  weights_idem = weights_idem & idem
+   398                                           
+   399         2          5.0      2.5      0.0              if weights_idem:
+   400                                           
+   401         2         87.0     43.5      0.0                  print("Model multi_gpu and base Model have the same weights")
+   402                                           
+   403                                                       else:
+   404                                                           print("Model multi_gpu and base Model haven't the same weights")
+   405                                           
+   406         2       1075.0    537.5      0.0              Dice = (2 * np.sum(VP)) / (np.sum(Pos_pred) + np.sum(Pos_label))
+   407                                           
+   408         2        324.0    162.0      0.0              MSE = np.sum(MSE_list) / (patch_size ** 3 * len(MSE_list))
+   409                                           
+   410         2         63.0     31.5      0.0              print("Iter " + str(EpochIndex) + " [Test MSE : " + str(MSE) + "]")
+   411                                           
+   412         2       1956.0    978.0      0.0              df_MSE.loc[EpochIndex, "MSE"] = MSE
+   413                                                       
+   414         2          8.0      4.0      0.0              if self.fit_mask : 
+   415                                                           
+   416         2       3278.0   1639.0      0.0                  Dice_Mask = (2 * np.sum(VP_mask_all_label,axis=1)) / (np.sum(Pos_pred_mask_all_label,axis=1) + np.sum(Pos_label_mask_all_label,axis=1))
+   417                                                           
+   418         2       1332.0    666.0      0.0                  df_dice.loc[EpochIndex, "Dice_label_1"] = Dice
+   419         2       1651.0    825.5      0.0                  df_dice.loc[EpochIndex, colunms_dice_mask] = Dice_Mask
+   420                                                           
+   421         2         65.0     32.5      0.0                  print("Iter " + str(EpochIndex) + " [Test Dice label 1 : " + str(Dice) + "]")
+   422         2        696.0    348.0      0.0                  print("Iter " + str(EpochIndex) + " [Test Dice Mask : " + str(Dice_Mask) + "]")
+   423                                           
+   424                                                       
+   425                                                       else : 
+   426                                                           
+   427                                                           df_dice.loc[EpochIndex, "Dice"] = Dice
+   428                                                           
+   429                                                           print("Iter " + str(EpochIndex) + " [Test Dice : " + str(Dice) + "]")
+   430                                                           
+   431                                                           
+   432                                                           
+   433                                           
+   434         2       3726.0   1863.0      0.0              df_dice.to_csv(dice_file)
+   435         2       2663.0   1331.5      0.0              df_MSE.to_csv(mse_file)
+   436                                           
+   437         2   35007060.0 17503530.0      0.4              shutil.rmtree(os.path.join(folder_training_data,"train_mini_batch"))
+   438                                           
+   439         1    4486413.0 4486413.0      0.1          shutil.rmtree(os.path.join(folder_training_data,"test_mini_batch"))
+
